@@ -1,0 +1,82 @@
+# Spins up all five services (gateway + four microservices) plus MongoDB with one command:
+#   docker compose up --build
+# Each service still owns its own logical database (verdant_products,
+# verdant_carts, verdant_orders, verdant_users) even though they share one MongoDB
+# container here for simplicity - in production each would typically be
+# its own managed database instance.
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  product-service:
+    build: ./product-service
+    ports:
+      - "4001:4001"
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/verdant_products
+      PORT: 4001
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on:
+      - mongo
+
+  cart-service:
+    build: ./cart-service
+    ports:
+      - "4002:4002"
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/verdant_carts
+      PORT: 4002
+      PRODUCT_SERVICE_URL: http://product-service:4001
+    depends_on:
+      - mongo
+      - product-service
+
+  order-service:
+    build: ./order-service
+    ports:
+      - "4003:4003"
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/verdant_orders
+      PORT: 4003
+      CART_SERVICE_URL: http://cart-service:4002
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on:
+      - mongo
+      - cart-service
+
+  user-service:
+    build: ./user-service
+    ports:
+      - "4004:4004"
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/verdant_users
+      PORT: 4004
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    depends_on:
+      - mongo
+
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      CLIENT_ORIGIN: http://localhost:5173
+      PRODUCT_SERVICE_URL: http://product-service:4001
+      CART_SERVICE_URL: http://cart-service:4002
+      ORDER_SERVICE_URL: http://order-service:4003
+      USER_SERVICE_URL: http://user-service:4004
+    depends_on:
+      - user-service
+      - product-service
+      - cart-service
+      - order-service
+
+volumes:
+  mongo-data:

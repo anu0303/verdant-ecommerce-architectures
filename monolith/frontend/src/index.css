@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html { scroll-behavior: smooth; }
+body { font-family: "Inter", sans-serif; }
+
+:focus-visible {
+  outline: 2px solid #45624b;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+.tag-notch::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 12px;
+  height: 12px;
+  background: #efeee4;
+  border: 1px solid #1c2b2233;
+  border-radius: 999px;
+}
+
+.input {
+  width: 100%;
+  border-radius: 2px;
+  border: 1px solid rgba(28, 43, 34, 0.2);
+  background: rgba(255, 255, 255, 0.6);
+  padding: 0.5rem 0.75rem;
+  font-family: "Inter", sans-serif;
+  font-size: 0.875rem;
+  color: #1c2b22;
+}
+.input:focus {
+  border-color: #45624b;
+  background: white;
+  outline: none;
+}

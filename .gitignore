@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Environment files (never commit real secrets/connection strings)
+.env
+
+# Build output
+dist/
+build/
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+npm-debug.log*
+*.log
+
+# Uploaded product images
+**/uploads/*
+!**/uploads/.gitkeep
