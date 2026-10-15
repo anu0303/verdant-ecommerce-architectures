@@ -21,3 +21,4 @@ npm-debug.log*
 # Uploaded product images
 **/uploads/*
 !**/uploads/.gitkeep
+CloudComputingLab-DockerDemo1/

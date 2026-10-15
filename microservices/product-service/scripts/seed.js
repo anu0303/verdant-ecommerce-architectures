@@ -72,6 +72,11 @@ const products = [
 
 async function seed() {
   await connectDB();
+  if (process.env.SEED_ONLY_IF_EMPTY === "true" && (await Product.countDocuments()) > 0) {
+    console.log("[product-service] products already exist - skipping seed");
+    await mongoose.disconnect();
+    process.exit(0);
+  }
   await Product.deleteMany({});
   await Product.insertMany(products);
   console.log(`[product-service] seeded ${products.length} products`);

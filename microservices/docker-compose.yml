@@ -1,82 +1,185 @@
-# Spins up all five services (gateway + four microservices) plus MongoDB with one command:
-#   docker compose up --build
-# Each service still owns its own logical database (verdant_products,
-# verdant_carts, verdant_orders, verdant_users) even though they share one MongoDB
-# container here for simplicity - in production each would typically be
-# its own managed database instance.
-version: "3.9"
+# Verdant E-commerce - Microservices, containerized with Docker Compose
+#   docker compose up --build -d      then open http://localhost:5173
+#
+#   Browser -> frontend (Nginx) --/api--> api-gateway :4000
+#                                           |-> user-service    :4004 -|
+#                                           |-> product-service :4001 -|-> mongo
+#                                           |-> cart-service    :4002 -|
+#                                           |-> order-service   :4003 -|
+#
+# NETWORKS
+#   frontend-net : frontend + api-gateway (browser-facing tier)
+#   backend-net  : api-gateway + 4 microservices + mongo (internal tier)
+#   Only the gateway is on both, so the frontend can never reach a service or the DB directly.
+#
+# VOLUMES
+#   mongo-data      : MongoDB data (users, products, carts, orders) survives `docker compose down`
+#   mongo-config    : MongoDB config database
+#   product-uploads : product images uploaded from the Admin "Add Product" page
+
+x-jwt: &jwt
+  JWT_SECRET: ${JWT_SECRET:-verdant-docker-jwt-secret}
 
 services:
+
+  # ------------------------------------------------------------- database
   mongo:
     image: mongo:7
-    ports:
-      - "27017:27017"
+    container_name: verdant-mongo
+    restart: unless-stopped
     volumes:
       - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # --------------------------------------------- one-shot seed job
+  # Loads the 15 sample products, then exits. SEED_ONLY_IF_EMPTY stops it
+  # wiping products you added yourself when the stack is restarted.
+  product-seed:
+    build: ./product-service
+    image: verdant/product-service:1.0
+    container_name: verdant-product-seed
+    command: ["node", "scripts/seed.js"]
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/verdant_products
+      SEED_ONLY_IF_EMPTY: "true"
+    networks:
+      - backend-net
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+
+  # -------------------------------------------------------- microservices
+  user-service:
+    build: ./user-service
+    image: verdant/user-service:1.0
+    container_name: verdant-user-service
+    restart: unless-stopped
+    environment:
+      <<: *jwt
+      PORT: 4004
+      MONGODB_URI: mongodb://mongo:27017/verdant_users
+    networks:
+      - backend-net
+    depends_on:
+      mongo:
+        condition: service_healthy
 
   product-service:
     build: ./product-service
-    ports:
-      - "4001:4001"
+    image: verdant/product-service:1.0
+    container_name: verdant-product-service
+    restart: unless-stopped
     environment:
-      MONGODB_URI: mongodb://mongo:27017/verdant_products
+      <<: *jwt
       PORT: 4001
-      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      MONGODB_URI: mongodb://mongo:27017/verdant_products
+    volumes:
+      - product-uploads:/app/uploads
+    networks:
+      - backend-net
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
+      product-seed:
+        condition: service_completed_successfully
 
   cart-service:
     build: ./cart-service
-    ports:
-      - "4002:4002"
+    image: verdant/cart-service:1.0
+    container_name: verdant-cart-service
+    restart: unless-stopped
     environment:
-      MONGODB_URI: mongodb://mongo:27017/verdant_carts
       PORT: 4002
-      PRODUCT_SERVICE_URL: http://product-service:4001
+      MONGODB_URI: mongodb://mongo:27017/verdant_carts
+      PRODUCT_SERVICE_URL: http://product-service:4001   # service name = hostname on the network
+    networks:
+      - backend-net
     depends_on:
-      - mongo
-      - product-service
+      mongo:
+        condition: service_healthy
+      product-service:
+        condition: service_started
 
   order-service:
     build: ./order-service
-    ports:
-      - "4003:4003"
+    image: verdant/order-service:1.0
+    container_name: verdant-order-service
+    restart: unless-stopped
     environment:
-      MONGODB_URI: mongodb://mongo:27017/verdant_orders
+      <<: *jwt
       PORT: 4003
+      MONGODB_URI: mongodb://mongo:27017/verdant_orders
       CART_SERVICE_URL: http://cart-service:4002
-      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+    networks:
+      - backend-net
     depends_on:
-      - mongo
-      - cart-service
+      mongo:
+        condition: service_healthy
+      cart-service:
+        condition: service_started
 
-  user-service:
-    build: ./user-service
-    ports:
-      - "4004:4004"
-    environment:
-      MONGODB_URI: mongodb://mongo:27017/verdant_users
-      PORT: 4004
-      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
-    depends_on:
-      - mongo
-
+  # ---------------------------------------------------------- API gateway
   api-gateway:
     build: ./api-gateway
-    ports:
-      - "4000:4000"
+    image: verdant/api-gateway:1.0
+    container_name: verdant-api-gateway
+    restart: unless-stopped
     environment:
       PORT: 4000
       CLIENT_ORIGIN: http://localhost:5173
+      USER_SERVICE_URL: http://user-service:4004
       PRODUCT_SERVICE_URL: http://product-service:4001
       CART_SERVICE_URL: http://cart-service:4002
       ORDER_SERVICE_URL: http://order-service:4003
-      USER_SERVICE_URL: http://user-service:4004
+    ports:
+      - "4000:4000"
+    networks:
+      - frontend-net
+      - backend-net
     depends_on:
       - user-service
       - product-service
       - cart-service
       - order-service
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ------------------------------------------------------------- frontend
+  # React app built to static files and served by Nginx, which forwards
+  # /api and /uploads to the gateway (same job the Vite dev proxy did).
+  frontend:
+    build: ./frontend
+    image: verdant/frontend:1.0
+    container_name: verdant-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    networks:
+      - frontend-net
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+
+networks:
+  frontend-net:
+    driver: bridge
+  backend-net:
+    driver: bridge
 
 volumes:
   mongo-data:
+  mongo-config:
+  product-uploads:
